@@ -1,45 +1,64 @@
 from crewai_tools import BaseTool
 import requests
-import urllib.parse
+import xml.etree.ElementTree as ET  # Import missing in original code
 
 class ArXivAPITool(BaseTool):
-    name = "ArXiv API Tool"
-    description = "Fetches paper metadata from the ArXiv API based on complex search queries."
+    name: str = "ArXiv API Tool"
+    description: str = "Fetches paper metadata from the ArXiv API based on complex search queries."
+    base_url: str = "http://export.arxiv.org/api/query?"
 
-    def __init__(self):
-        self.base_url = "http://export.arxiv.org/api/query?"
-
-    def _construct_query(self, search_params):
-        # Constructing the query part of the URL based on search_params
-        # search_params is expected to be a dictionary where keys are metadata fields
-        # and values are the search terms for those fields
-        query_parts = []
-        for field, term in search_params.items():
-            query_parts.append(f"{field}:{urllib.parse.quote(term)}")
-        return " AND ".join(query_parts)
-
-    def _run(self, search_params: dict) -> str:
-        query = self._construct_query(search_params)
-        url = f"{self.base_url}search_query={query}&max_results=10"
+    def _run(self, search_query: str, max_results: int=5) -> str:
+        # Directly use the search_query in the URL
+        url = f"{self.base_url}search_query={search_query}&max_results={max_results}"
         try:
             response = requests.get(url)
             response.raise_for_status()
-            entries = response.json()['feed']['entry']
+            
+            # Parse the XML response
+            root = ET.fromstring(response.content)
             results = []
-            for entry in entries:
+            for entry in root.findall('.//{http://www.w3.org/2005/Atom}entry'):
+                title = entry.find('.//{http://www.w3.org/2005/Atom}title').text
+                published = entry.find('.//{http://www.w3.org/2005/Atom}published').text[:4]  # Extract the year
+                summary = entry.find('.//{http://www.w3.org/2005/Atom}summary').text
+                
+                authors = [author.find('.//{http://www.w3.org/2005/Atom}name').text for author in entry.findall('.//{http://www.w3.org/2005/Atom}author')]
+                
                 paper_metadata = {
-                    'title': entry['title'],
-                    'authors': [author['name'] for author in entry['author']],
-                    'abstract': entry['summary'],
-                    'year': entry['published'][:4]
+                    'title': title.strip(),
+                    'authors': authors,
+                    'abstract': summary.strip(),
+                    'year': published
                 }
                 results.append(paper_metadata)
+                
             return str(results)
+        
         except requests.RequestException as e:
             return f"Failed to fetch data from ArXiv: {str(e)}"
+        except ET.ParseError:
+            return "Failed to parse XML response from ArXiv"
 
 if __name__ == "__main__":
-    # Example usage
     arxiv_tool = ArXivAPITool()
-    search_params = {"author": "Einstein", "title": "quantum"}
-    print(arxiv_tool._run(search_params))
+
+    # Queries are now passed directly as strings
+    query_examples = [
+        # 'au:"Stephen Hawking"',
+        # 'ti:"Black Hole Information Paradox"',
+        # 'au:"Leonard Susskind" AND abs:"quantum entanglement"',
+        # 'cat:quant-ph',
+        # 'au:"Edward Witten" OR au:"Juan Maldacena"',
+        # 'abs:"dark energy" ANDNOT abs:"cosmological constant"',
+        # 'submittedDate:[20200101 TO 20201231]',
+        # 'abs:"neural networks" AND cat:cs.LG',
+        # 'ti:"machine learning" OR abs:"deep learning"',
+        # '(au:"Albert Einstein" AND ti:"General Relativity") OR (abs:"spacetime" AND cat:gr-qc)',
+        "abs:\"history of AI\" AND (submittedDate:[20200101 TO 20240329])",
+    ]
+
+    # Iterate over the query examples and execute them
+    for i, query in enumerate(query_examples, start=1):
+        print(f"Query {i}:{query}")
+        print(arxiv_tool._run(query))
+        print("-" * 40)  # Separator for readability
